@@ -11,7 +11,9 @@ from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 
 from transformers import pipeline
 from youtube_comment_downloader import YoutubeCommentDownloader
+from urllib.parse import urlparse, parse_qs
 from fastapi import FastAPI
+from fastapi import HTTPException
 from pydantic import BaseModel
 
 # LOAD CSV
@@ -42,6 +44,28 @@ classifier = pipeline(
     model="w11wo/indonesian-roberta-base-sentiment-classifier"
 )
 
+from urllib.parse import urlparse, parse_qs
+
+def normalize_youtube_url(url):
+
+    # URL pendek
+    if "youtu.be" in url:
+
+        video_id = url.split("/")[-1].split("?")[0]
+
+        return f"https://www.youtube.com/watch?v={video_id}"
+
+    # URL normal
+    if "youtube.com" in url:
+
+        parsed = urlparse(url)
+
+        query = parse_qs(parsed.query)
+
+        if "v" in query:
+            return f"https://www.youtube.com/watch?v={query['v'][0]}"
+
+    return url
 
 # CLEANING
 
@@ -104,12 +128,6 @@ def hybrid_predict(text):
     if lr_prob < 0.90:
         use_bert = True
 
-    # # teks mengandung slang
-    # slang_words = ["msh", "pake", "gk", "ga", "bgt"]
-
-    # if any(word in clean.split() for word in slang_words):
-    #     use_bert = True
-
     # INDOBERT
 
     if use_bert:
@@ -167,50 +185,70 @@ def predict(data: TextRequest):
 @app.post("/analyze-youtube")
 def analyze_youtube(data: YoutubeRequest):
 
-    downloader = YoutubeCommentDownloader()
+    try:
 
-    comments = downloader.get_comments_from_url(data.url)
+        downloader = YoutubeCommentDownloader()
 
-    comments = list(comments)
+        # NORMALISASI URL
+        video_url = normalize_youtube_url(data.url)
 
-    results = []
+        # PAKAI URL YANG SUDAH DINORMALISASI
+        comments_generator = downloader.get_comments_from_url(video_url)
 
-    positif = 0
-    negatif = 0
-    netral = 0
+        comments = list(comments_generator)
 
-    for item in comments:
+        if not comments:
+            return {
+                "message": "Komentar tidak ditemukan",
+                "total_comments": 0,
+                "results": []
+            }
 
-        text = item.get("text", "")
+        results = []
 
-        if text.strip() == "":
-            continue
+        positif = 0
+        negatif = 0
+        netral = 0
 
-        sentiment = hybrid_predict(text)
+        for item in comments:
 
-        if sentiment == "positif":
-            positif += 1
+            text = item.get("text", "")
 
-        elif sentiment == "negatif":
-            negatif += 1
+            if text.strip() == "":
+                continue
 
-        else:
-            netral += 1
+            sentiment = hybrid_predict(text)
 
-        results.append({
-            "comment": text,
-            "sentiment": sentiment
-        })
+            if sentiment == "positif":
+                positif += 1
 
-    return {
+            elif sentiment == "negatif":
+                negatif += 1
 
-        "total_comments": len(results),
+            else:
+                netral += 1
 
-        "summary": {
-            "positif": positif,
-            "negatif": negatif,
-            "netral": netral
-        },
+            results.append({
+                "comment": text,
+                "sentiment": sentiment
+            })
 
-        "results": results
-    }
+        return {
+
+            "total_comments": len(results),
+
+            "summary": {
+                "positif": positif,
+                "negatif": negatif,
+                "netral": netral
+            },
+
+            "results": results
+        }
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
