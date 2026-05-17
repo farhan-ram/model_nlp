@@ -2,11 +2,15 @@ import pandas as pd
 import re
 import joblib
 
+import nltk
+nltk.download('punkt')
+nltk.download('punkt_tab')
+
 from nltk.tokenize import word_tokenize
 from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 
 from transformers import pipeline
-
+from youtube_comment_downloader import YoutubeCommentDownloader
 from fastapi import FastAPI
 from pydantic import BaseModel
 
@@ -147,6 +151,9 @@ app = FastAPI()
 class TextRequest(BaseModel):
     text: str
 
+class YoutubeRequest(BaseModel):
+    url: str
+
 @app.post("/predict")
 def predict(data: TextRequest):
 
@@ -155,4 +162,55 @@ def predict(data: TextRequest):
     return {
         "text": data.text,
         "sentiment": result
+    }
+
+@app.post("/analyze-youtube")
+def analyze_youtube(data: YoutubeRequest):
+
+    downloader = YoutubeCommentDownloader()
+
+    comments = downloader.get_comments_from_url(data.url)
+
+    comments = list(comments)
+
+    results = []
+
+    positif = 0
+    negatif = 0
+    netral = 0
+
+    for item in comments:
+
+        text = item.get("text", "")
+
+        if text.strip() == "":
+            continue
+
+        sentiment = hybrid_predict(text)
+
+        if sentiment == "positif":
+            positif += 1
+
+        elif sentiment == "negatif":
+            negatif += 1
+
+        else:
+            netral += 1
+
+        results.append({
+            "comment": text,
+            "sentiment": sentiment
+        })
+
+    return {
+
+        "total_comments": len(results),
+
+        "summary": {
+            "positif": positif,
+            "negatif": negatif,
+            "netral": netral
+        },
+
+        "results": results
     }
